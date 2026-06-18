@@ -1,3 +1,4 @@
+import axios from "axios";
 import { logger } from "./lib/logger.js";
 const VINTED_BASE = "https://www.vinted.de";
 const CONDITION_LABELS = {
@@ -49,11 +50,64 @@ export function parseItem(item) {
     };
 }
 export async function searchVinted(searchText, options = {}) {
-    // TEMPORARY: Vinted API requires authentication cookies which we don't have
-    // Disabling Vinted searches until proper authentication is implemented
-    // The bot will continue working with Kleinanzeigen only
-    logger.info(`⏸️ Vinted Suche übersprungen (Auth erforderlich): ${searchText}`);
-    return [];
+    try {
+        // Build catalog URL like Python version (public page, no auth needed)
+        const params = new URLSearchParams({
+            "search_text": searchText,
+            "order": "newest_first",
+        });
+        if (options.maxPrice && options.maxPrice > 0) {
+            params.append("price_to", options.maxPrice.toString());
+        }
+        if (options.catalogIds && options.catalogIds.length > 0) {
+            params.append("catalog_ids", options.catalogIds.join(","));
+        }
+        const catalogUrl = `${VINTED_BASE}/catalog?${params.toString()}`;
+        logger.info(`🔍 Vinted Suche: ${searchText}`);
+        // Simple headers - no authentication
+        const headers = {
+            "User-Agent": randomUA(),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+        };
+        // First request to get the page and extract items from embedded JSON
+        const response = await axios.get(catalogUrl, {
+            headers,
+            timeout: 10000,
+            validateStatus: () => true,
+        });
+        if (response.status === 401 || response.status === 403) {
+            logger.warn(`⚠️ Vinted blockiert (${response.status})`);
+            return [];
+        }
+        if (response.status !== 200) {
+            logger.warn(`⚠️ Vinted Status ${response.status}`);
+            return [];
+        }
+        // Extract JSON data from HTML (Vinted embeds it in <script> tags)
+        const html = response.data;
+        const jsonMatch = html.match(/<script[^>]*>window\.App\s*=\s*({.*?})<\/script>/s);
+        if (!jsonMatch) {
+            logger.warn("⚠️ Konnte keine Vinted-Daten im HTML finden");
+            return [];
+        }
+        const appData = JSON.parse(jsonMatch[1]);
+        const items = appData?.items?.catalogItems ?? [];
+        if (items.length === 0) {
+            logger.info("✅ Vinted: 0 Items gefunden");
+            return [];
+        }
+        const parsed = items.map(parseItem).filter(item => item.id && item.price > 0);
+        logger.info(`✅ Vinted: ${parsed.length} Items gefunden`);
+        return parsed;
+    }
+    catch (error) {
+        logger.error(`❌ Vinted Fehler: ${String(error)}`);
+        return [];
+    }
 }
 export async function findCheaperAlternatives(item, maxResults = 5) {
     if (!item.brand)
