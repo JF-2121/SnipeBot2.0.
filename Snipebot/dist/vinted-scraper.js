@@ -1,4 +1,3 @@
-import axios from "axios";
 import { logger } from "./lib/logger.js";
 const VINTED_BASE = "https://www.vinted.de";
 const CONDITION_LABELS = {
@@ -50,49 +49,11 @@ export function parseItem(item) {
     };
 }
 export async function searchVinted(searchText, options = {}) {
-    try {
-        const params = {
-            search_text: searchText,
-            order: "newest_first",
-            per_page: 20,
-        };
-        if (options.maxPrice && options.maxPrice > 0) {
-            params["price_to"] = options.maxPrice;
-        }
-        if (options.catalogIds && options.catalogIds.length > 0) {
-            params["catalog_ids"] = options.catalogIds.join(",");
-        }
-        logger.info(`🔍 Vinted Suche: ${searchText}`);
-        // Use simple headers like Python version - no auth needed
-        const headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36",
-            Accept: "application/json, text/plain, */*",
-            "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
-            Referer: `${VINTED_BASE}/catalog`,
-        };
-        const response = await axios.get(`${VINTED_BASE}/api/v2/catalog/items`, {
-            params,
-            headers,
-            timeout: 8000,
-            validateStatus: () => true,
-        });
-        if (response.status === 401 || response.status === 403) {
-            logger.warn(`⚠️ Vinted blockiert (${response.status}) - versuche es in 2 Min. erneut`);
-            return [];
-        }
-        if (response.status !== 200) {
-            logger.warn(`⚠️ Vinted Status ${response.status}`);
-            return [];
-        }
-        const items = response.data?.items ?? [];
-        const parsed = items.map(parseItem);
-        logger.info(`✅ Vinted: ${parsed.length} Items gefunden`);
-        return parsed;
-    }
-    catch (error) {
-        logger.error(`❌ Vinted Fehler: ${String(error)}`);
-        return [];
-    }
+    // TEMPORARY: Vinted API requires authentication cookies which we don't have
+    // Disabling Vinted searches until proper authentication is implemented
+    // The bot will continue working with Kleinanzeigen only
+    logger.info(`⏸️ Vinted Suche übersprungen (Auth erforderlich): ${searchText}`);
+    return [];
 }
 export async function findCheaperAlternatives(item, maxResults = 5) {
     if (!item.brand)
