@@ -103,6 +103,8 @@ const watchConfig: WatchConfig = {
 };
 
 const seenItemIds = new Set<string>();
+let rateLimitedUntil = 0;
+let consecutiveRateLimits = 0;
 
 function genderLabel(g: Gender): string {
   if (g === "herren") return "Herren";
@@ -276,6 +278,22 @@ async function postDealsForGenderTarget(client: Client, categoryKeys: string[], 
           }),
         ]);
         
+        // Check if Vinted returned empty due to rate limiting
+        if (vintedItems.length === 0 && kleinanzeigenItems.length > 0) {
+          consecutiveRateLimits++;
+          if (consecutiveRateLimits >= 3) {
+            // Exponential backoff: 10, 20, 40 minutes
+            const backoffMinutes = Math.min(10 * Math.pow(2, consecutiveRateLimits - 3), 60);
+            rateLimitedUntil = Date.now() + backoffMinutes * 60 * 1000;
+            logger.warn(`🚫 Rate-Limit erkannt (${consecutiveRateLimits}x) - Pause für ${backoffMinutes} Minuten`);
+            await notifyBlocked(client);
+            return;
+          }
+        } else if (vintedItems.length > 0) {
+          // Reset counter on successful fetch
+          consecutiveRateLimits = 0;
+        }
+        
         // Merge and sort by price (cheapest first)
         const allItems = [...vintedItems, ...kleinanzeigenItems].sort((a, b) => a.price - b.price);
         
@@ -296,7 +314,7 @@ async function postDealsForGenderTarget(client: Client, categoryKeys: string[], 
       } catch (err) {
         logger.error(`❌ Fehler bei der Dealsuche für Marke ${brand} in ${categoryKey}: ` + String(err));
       }
-      await new Promise((r) => setTimeout(r, 800));
+      await new Promise((r) => setTimeout(r, 3000));
     }
   }
 }
@@ -348,6 +366,13 @@ async function notifyBlocked(client: Client) {
 
 async function postDeals(client: Client) {
   if (!watchConfig.active) return;
+
+  // Check if we're rate limited
+  if (Date.now() < rateLimitedUntil) {
+    const waitMinutes = Math.ceil((rateLimitedUntil - Date.now()) / 60000);
+    logger.warn(`⏸️ Rate-Limit aktiv - warte noch ${waitMinutes} Minuten`);
+    return;
+  }
 
   logger.info("🚀 Starte Deal-Suche auf Vinted & Kleinanzeigen");
 
@@ -447,8 +472,8 @@ export async function startBot() {
       logger.error("Registrierung der Slash-Commands fehlgeschlagen: " + String(err));
     }
 
-    cron.schedule("*/2 * * * *", () => {
-      logger.info("🔄 Starte automatische Deal-Suche (alle 2 Minuten)");
+    cron.schedule("*/10 * * * *", () => {
+      logger.info("🔄 Starte automatische Deal-Suche (alle 10 Minuten)");
       postDeals(client).catch((err) => logger.error("Cron Dealcheck fehlgeschlagen: " + String(err)));
     });
 
