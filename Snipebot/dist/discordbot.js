@@ -184,22 +184,20 @@ function runFakeCheck(item) {
 function buildDealEmbed(item) {
     const priceStr = `${item.price.toFixed(2)} ${item.currency}`;
     const platformName = item.platform === "vinted" ? "Vinted" : "Kleinanzeigen";
-    const platformColor = item.platform === "vinted" ? 0x09b1ba : 0xff6b35;
     const embed = new EmbedBuilder()
-        .setColor(platformColor)
-        .setTitle(`${item.brand || "—"} | ${item.title}`.slice(0, 250))
+        .setColor(0x6EB6FF)
+        .setTitle(`${item.title}`.slice(0, 250))
         .setURL(item.url)
-        .addFields({ name: "💰 Preis", value: priceStr, inline: true }, { name: "🏷️ Marke", value: item.brand || "—", inline: true }, { name: "📐 Größe", value: item.size || "—", inline: true }, { name: "✨ Zustand", value: item.condition || "—", inline: true }, { name: "👤 Verkäufer", value: item.seller || "—", inline: true }, { name: "🔗 Plattform", value: `${platformName} · DE`, inline: true })
-        .setFooter({ text: `Deal Bot • ${platformName}` })
+        .addFields({ name: "💰 Preis", value: priceStr, inline: true }, { name: "🏷️ Marke", value: item.brand || "—", inline: true }, { name: "📐 Größe", value: item.size || "—", inline: true })
+        .setFooter({ text: `${platformName} • Snipebot` })
         .setTimestamp();
     if (item.imageUrl)
         embed.setImage(item.imageUrl);
     return embed;
 }
 function buildDealButtons(item) {
-    const row1 = new ActionRowBuilder().addComponents(new ButtonBuilder().setLabel("🛒 Ansehen").setStyle(ButtonStyle.Link).setURL(item.url), new ButtonBuilder().setLabel("💬 Anschreiben").setStyle(ButtonStyle.Link).setURL(`${item.url}#message`), new ButtonBuilder().setCustomId(`save_${item.id}`).setLabel("❤️ Merken").setStyle(ButtonStyle.Danger));
-    const row2 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`interested_${item.id}`).setLabel("👍 Interessiert").setStyle(ButtonStyle.Secondary), new ButtonBuilder().setCustomId(`fakecheck_${item.id}`).setLabel("🔍 Fake-Check").setStyle(ButtonStyle.Primary), new ButtonBuilder().setCustomId(`pricecheck_${item.id}`).setLabel("💰 Pricecheck").setStyle(ButtonStyle.Success));
-    return [row1, row2];
+    const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`save_${item.id}`).setLabel("❤️ Merken").setStyle(ButtonStyle.Danger), new ButtonBuilder().setCustomId(`interested_${item.id}`).setLabel("👍 Interessiert").setStyle(ButtonStyle.Secondary), new ButtonBuilder().setCustomId(`fakecheck_${item.id}`).setLabel("🔍 Fake-Check").setStyle(ButtonStyle.Primary), new ButtonBuilder().setCustomId(`pricecheck_${item.id}`).setLabel("💰 Pricecheck").setStyle(ButtonStyle.Success));
+    return [row];
 }
 async function postDealsForGenderTarget(client, categoryKeys, target) {
     for (const categoryKey of categoryKeys) {
@@ -228,20 +226,8 @@ async function postDealsForGenderTarget(client, categoryKeys, target) {
                         category: categoryKey,
                     }),
                 ]);
-                // Check if Vinted returned empty due to rate limiting
-                if (vintedItems.length === 0 && kleinanzeigenItems.length > 0) {
-                    consecutiveRateLimits++;
-                    if (consecutiveRateLimits >= 3) {
-                        // Exponential backoff: 10, 20, 40 minutes
-                        const backoffMinutes = Math.min(10 * Math.pow(2, consecutiveRateLimits - 3), 60);
-                        rateLimitedUntil = Date.now() + backoffMinutes * 60 * 1000;
-                        logger.warn(`🚫 Rate-Limit erkannt (${consecutiveRateLimits}x) - Pause für ${backoffMinutes} Minuten`);
-                        await notifyBlocked(client);
-                        return;
-                    }
-                }
-                else if (vintedItems.length > 0) {
-                    // Reset counter on successful fetch
+                // Reset counter if we got any results
+                if (vintedItems.length > 0 || kleinanzeigenItems.length > 0) {
                     consecutiveRateLimits = 0;
                 }
                 // Merge and sort by price (cheapest first)
@@ -394,8 +380,8 @@ export async function startBot() {
         catch (err) {
             logger.error("Registrierung der Slash-Commands fehlgeschlagen: " + String(err));
         }
-        cron.schedule("*/10 * * * *", () => {
-            logger.info("🔄 Starte automatische Deal-Suche (alle 10 Minuten)");
+        cron.schedule("*/5 * * * *", () => {
+            logger.info("🔄 Starte automatische Deal-Suche (alle 5 Minuten)");
             postDeals(client).catch((err) => logger.error("Cron Dealcheck fehlgeschlagen: " + String(err)));
         });
         await postDeals(client);
