@@ -15,19 +15,22 @@ import {
 } from "discord.js";
 import cron from "node-cron";
 import axios from "axios";
+import { searchAllPlatforms } from "./scrapers/registry.js";
+import { ScrapedItem } from "./scrapers/types.js";
+import { CATEGORIES, ALL_CATEGORY_KEYS } from "./config/categories.js";
+import { logger } from "./lib/logger.js";
 import {
-  searchVinted,
   findCheaperAlternatives as findCheaperVinted,
   type VintedItem,
 } from "./vinted-scraper.js";
-import {
-  searchKleinanzeigen,
-  type KleinanzeigenItem,
-} from "./kleinanzeigen-scraper.js";
-import { logger } from "./lib/logger.js";
 
-// Unified item type for both platforms
-type DealItem = VintedItem | KleinanzeigenItem;
+interface DealItem extends ScrapedItem {
+  currency: string;
+  condition: string;
+  seller: string;
+  location: string;
+  url: string;
+}
 
 const FALLBACK_CHANNEL_ID = "1483482170583678976";
 const DEFAULT_BRANDS = ["Nike", "Adidas", "Lacoste", "Ralph Lauren", "Carhartt"];
@@ -68,24 +71,8 @@ async function isGuildLicensed(guildId: string): Promise<boolean> {
 
 type Gender = "herren" | "damen" | "beide";
 
-interface CategoryDef {
-  label: string;
-  keyword: string;
-  channelName: string;
-  kleinanzeigenCategory: string;
-}
-
-const CATEGORIES: Record<string, CategoryDef> = {
-  shirts: { label: "Shirts & Tops", keyword: "shirt", channelName: "men_shirts", kleinanzeigenCategory: "87" },
-  pants: { label: "Hosen & Jeans", keyword: "hose", channelName: "men_pants", kleinanzeigenCategory: "87" },
-  shoes: { label: "Schuhe", keyword: "schuhe", channelName: "men_shoes", kleinanzeigenCategory: "158" },
-  accessories: { label: "Accessoires", keyword: "", channelName: "deals", kleinanzeigenCategory: "87" },
-};
-
-const ALL_CATEGORY_KEYS = Object.keys(CATEGORIES);
-
 const CATEGORY_CHOICES = [
-  { name: "Shirts & Tops", value: "shirts" },
+  { name: "Shirts & Polos", value: "shirts" },
   { name: "Hosen & Jeans", value: "pants" },
   { name: "Schuhe", value: "shoes" },
   { name: "Accessoires", value: "accessories" },
@@ -115,22 +102,6 @@ function genderLabel(g: Gender): string {
   if (g === "herren") return "Herren";
   if (g === "damen") return "Damen";
   return "Herren & Damen";
-}
-
-function buildSearchText(brand: string, categoryKey: string): string {
-  const cat = CATEGORIES[categoryKey];
-  if (!cat || !cat.keyword) return brand;
-  return `${brand} ${cat.keyword}`;
-}
-
-async function findChannelInSection(client: Client, channelName: string, sectionName: string): Promise<TextChannel | null> {
-  for (const [, guild] of client.guilds.cache) {
-    const category = guild.channels.cache.find((c) => c.name.toLowerCase() === sectionName.toLowerCase() && c.type === 4);
-    if (!category) continue;
-    const ch = guild.channels.cache.find((c) => c.name === channelName && c instanceof TextChannel && c.parentId === category.id) as TextChannel | undefined;
-    if (ch) return ch;
-  }
-  return null;
 }
 
 async function findChannelByName(client: Client, channelName: string): Promise<TextChannel | null> {
@@ -239,121 +210,67 @@ function buildDealButtons(item: DealItem): ActionRowBuilder<ButtonBuilder>[] {
   return [row];
 }
 
-interface GenderTarget {
-  section: string;
-  catalogIdsFn: (categoryKey: string) => number[];
-}
+async function postDealsForCategory(client: Client, categoryKey: string) {
+  const cat = CATEGORIES[categoryKey];
+  if (!cat) return;
+  
+  logger.info(`🔍 Suche in Kategorie: ${cat.label}`);
+  await new Promise((r) => setTimeout(r, 500));
 
-async function postDealsForGenderTarget(client: Client, categoryKeys: string[], target: GenderTarget) {
-  for (const categoryKey of categoryKeys) {
-    const cat = CATEGORIES[categoryKey];
-    if (!cat) continue;
-    logger.info(`🔍 Suche in Kategorie: ${cat.label}`);
-    await new Promise((r) => setTimeout(r, 500));
+  const channel = (await findChannelByName(client, cat.channelName)) ?? (await getFallbackChannel(client));
 
-    const channel = (await findChannelByName(client, cat.channelName)) ?? (await getFallbackChannel(client));
-
-    if (!channel) {
-      logger.warn(`Kanal #${cat.channelName} nicht gefunden.`);
-      continue;
-    }
-
-    for (const brand of watchConfig.brands) {
-      try {
-        // Build search text with category keyword
-        const searchText = cat.keyword ? `${brand} ${cat.keyword}` : brand;
-        logger.info(`🔎 Suche: "${searchText}" in #${cat.channelName} (Max: ${watchConfig.maxPrice || 'unbegrenzt'}€)`);
-        
-        // Search both platforms in parallel
-        const [vintedItems, kleinanzeigenItems] = await Promise.all([
-          searchVinted(searchText, {
-            maxPrice: watchConfig.maxPrice,
-          }),
-          searchKleinanzeigen(searchText, {
-            maxPrice: watchConfig.maxPrice,
-            category: categoryKey,
-          }),
-        ]);
-        
-        // Reset counter if we got any results
-        if (vintedItems.length > 0 || kleinanzeigenItems.length > 0) {
-          consecutiveRateLimits = 0;
-        }
-        
-        // Merge and sort by price (cheapest first)
-        const allItems = [...vintedItems, ...kleinanzeigenItems].sort((a, b) => a.price - b.price);
-        
-        logger.info(`✅ ${allItems.length} Items gefunden (${vintedItems.length} Vinted, ${kleinanzeigenItems.length} Kleinanzeigen)`);
-        const newItems = allItems.filter((i) => !seenItemIds.has(i.id));
-        logger.info(`📌 ${newItems.length} neue Items (${allItems.length - newItems.length} bereits gesehen)`);
-
-        // Post top 3 best deals (cheapest)
-        for (const item of newItems.slice(0, 3)) {
-          seenItemIds.add(item.id);
-          cacheItem(item);
-          const embed = buildDealEmbed(item);
-          const rows = buildDealButtons(item);
-          await channel.send({ embeds: [embed], components: rows });
-          logger.info(`📤 Deal gepostet: ${item.platform.toUpperCase()} - ${item.brand} - ${item.price}€`);
-          await new Promise((r) => setTimeout(r, 300));
-        }
-      } catch (err) {
-        logger.error(`❌ Fehler bei der Dealsuche für Marke ${brand} in ${categoryKey}: ` + String(err));
-      }
-      await new Promise((r) => setTimeout(r, 3000));
-    }
+  if (!channel) {
+    logger.warn(`Kanal #${cat.channelName} nicht gefunden.`);
+    return;
   }
-}
 
-let lastBlockedNotify = 0;
-
-async function notifyBlocked(client: Client) {
-  if (Date.now() - lastBlockedNotify < 60 * 60 * 1000) return;
-  lastBlockedNotify = Date.now();
-
-  const embed = new EmbedBuilder()
-    .setColor(0xff4444)
-    .setTitle("⚠️ Vinted-Token abgelaufen")
-    .setDescription(
-      "Der Bot kann nicht mehr auf Vinted zugreifen.\n\n" +
-      "**So erneuerst du den Token (2 Minuten):**\n" +
-      "1️⃣ Öffne **vinted.de** im Browser und logge dich ein\n" +
-      "2️⃣ Drücke **F12** → Tab **Application** → **Cookies** → `www.vinted.de`\n" +
-      "3️⃣ Suche `access_token_web` → Wert **kopieren**\n" +
-      "4️⃣ Schick mir den kopierten Wert einfach **per DM** — oder nutze `/deals token`\n\n" +
-      "✅ Token gilt dann ca. **12 Stunden**",
-    )
-    .setFooter({ text: "Snipebot • Token-Erneuerung" })
-    .setTimestamp();
-
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setLabel("🔗 Vinted öffnen")
-      .setStyle(ButtonStyle.Link)
-      .setURL("https://www.vinted.de"),
-  );
-
-  if (botOwnerId) {
+  for (const brand of watchConfig.brands) {
     try {
-      const owner = await client.users.fetch(botOwnerId);
-      const dm = await owner.createDM();
-      await dm.send({ embeds: [embed], components: [row] });
-      logger.info("Ablauf-Benachrichtigung an Bot-Owner via DM gesendet");
-    } catch (err) {
-      logger.warn("Konnte keine DM an den Bot-Owner senden: " + String(err));
-    }
-  }
+      const searchText = cat.keyword ? `${brand} ${cat.keyword}` : brand;
+      logger.info(`🔎 Suche: "${searchText}" in #${cat.channelName} (Max: ${watchConfig.maxPrice || 'unbegrenzt'}€)`);
+      
+      const allItems = await searchAllPlatforms(searchText, {
+        maxPrice: watchConfig.maxPrice,
+        category: categoryKey,
+      });
+      
+      if (allItems.length > 0) {
+        consecutiveRateLimits = 0;
+      }
+      
+      allItems.sort((a, b) => a.price - b.price);
+      
+      logger.info(`✅ ${allItems.length} items found`);
+      const newItems = allItems.filter((i) => !seenItemIds.has(i.id));
+      logger.info(`📌 ${newItems.length} neue Items (${allItems.length - newItems.length} bereits gesehen)`);
 
-  try {
-    const ch = await getFallbackChannel(client);
-    if (ch) await ch.send({ embeds: [embed], components: [row] });
-  } catch { /* ignorieren */ }
+      for (const item of newItems.slice(0, 3)) {
+        seenItemIds.add(item.id);
+        const dealItem: DealItem = {
+          ...item,
+          currency: "EUR",
+          condition: "—",
+          seller: "—",
+          location: "—",
+          url: item.link,
+        };
+        cacheItem(dealItem);
+        const embed = buildDealEmbed(dealItem);
+        const rows = buildDealButtons(dealItem);
+        await channel.send({ embeds: [embed], components: rows });
+        logger.info(`📤 Deal gepostet: ${item.platform.toUpperCase()} - ${item.brand} - ${item.price}€`);
+        await new Promise((r) => setTimeout(r, 300));
+      }
+    } catch (err) {
+      logger.error(`❌ Fehler bei der Dealsuche für Marke ${brand} in ${categoryKey}: ` + String(err));
+    }
+    await new Promise((r) => setTimeout(r, 3000));
+  }
 }
 
 async function postDeals(client: Client) {
   if (!watchConfig.active) return;
 
-  // Check if we're rate limited
   if (Date.now() < rateLimitedUntil) {
     const waitMinutes = Math.ceil((rateLimitedUntil - Date.now()) / 60000);
     logger.warn(`⏸️ Rate-Limit aktiv - warte noch ${waitMinutes} Minuten`);
@@ -362,11 +279,9 @@ async function postDeals(client: Client) {
 
   logger.info("🚀 Starte Deal-Suche auf Kleinanzeigen");
 
-  // Search all categories
-  const categoryKeys = ALL_CATEGORY_KEYS;
-  const target: GenderTarget = { section: "men", catalogIdsFn: () => [] };
-
-  await postDealsForGenderTarget(client, categoryKeys, target);
+  for (const categoryKey of ALL_CATEGORY_KEYS) {
+    await postDealsForCategory(client, categoryKey);
+  }
   
   logger.info("✅ Deal-Suche abgeschlossen");
 }
@@ -390,19 +305,8 @@ const commands = [
       sub.setName("kategorie").setDescription("Nur eine bestimmte Kategorie suchen")
         .addStringOption((o) => o.setName("typ").setDescription("Kategorie auswählen").setRequired(true).addChoices(...CATEGORY_CHOICES)),
     )
-    .addSubcommand((sub) =>
-      sub.setName("geschlecht").setDescription("Nach Herren / Damen / Beide filtern")
-        .addStringOption((o) =>
-          o.setName("typ").setDescription("Geschlecht auswählen").setRequired(true)
-            .addChoices({ name: "Herren", value: "herren" }, { name: "Damen", value: "damen" }, { name: "Beide", value: "beide" }),
-        ),
-    )
     .addSubcommand((sub) => sub.setName("suche").setDescription("Jetzt sofort nach Deals suchen"))
-    .addSubcommand((sub) => sub.setName("reset").setDescription("Cache zurücksetzen (zeigt alte Deals erneut)"))
-    .addSubcommand((sub) =>
-      sub.setName("token").setDescription("Vinted access_token_web Cookie manuell setzen")
-        .addStringOption((o) => o.setName("wert").setDescription("access_token_web Cookie-Wert aus Browser DevTools").setRequired(true)),
-    ),
+    .addSubcommand((sub) => sub.setName("reset").setDescription("Cache zurücksetzen (zeigt alte Deals erneut)")),
 
   new SlashCommandBuilder()
     .setName("lizenz")
@@ -422,7 +326,7 @@ export async function startBot() {
       GatewayIntentBits.GuildMessageReactions,
       GatewayIntentBits.DirectMessages,
     ],
-    partials: [2, 3], // Channel + Message Partials für DMs
+    partials: [2, 3],
   });
 
   client.once(Events.ClientReady, async (c) => {
@@ -455,12 +359,8 @@ export async function startBot() {
       postDeals(client).catch((err) => logger.error("Cron Dealcheck fehlgeschlagen: " + String(err)));
     });
 
-
-
     await postDeals(client);
   });
-
-
 
   client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.isButton()) {
@@ -518,9 +418,8 @@ export async function startBot() {
           return;
         }
 
-        // Only Vinted items support findCheaperAlternatives for now
         const alternatives = item.platform === "vinted" 
-          ? await findCheaperVinted(item as VintedItem)
+          ? await findCheaperVinted(item as any)
           : [];
 
         const mainEmbed = new EmbedBuilder()
@@ -662,10 +561,8 @@ export async function startBot() {
             `📊 **Status**\n` +
             `• Aktiv: ${watchConfig.active ? "✅ Ja" : "❌ Nein"}\n` +
             `• Marken: ${watchConfig.brands.join(", ")}\n` +
-            `• Geschlecht: **${genderLabel(watchConfig.gender)}**\n` +
             `• Max. Preis: ${watchConfig.maxPrice ? `${watchConfig.maxPrice} EUR` : "kein Limit"}\n` +
-            `• Items im Cache: ${seenItemIds.size} (${itemCache.size} im Speicher)\n` +
-            `• Kanal: #deals`,
+            `• Items im Cache: ${seenItemIds.size} (${itemCache.size} im Speicher)`,
           );
 
         } else if (sub === "marken") {
@@ -682,19 +579,10 @@ export async function startBot() {
 
         } else if (sub === "kategorie") {
           const typ = cmd.options.getString("typ", true);
-          if (typ !== "alle" && !CATEGORIES[typ]) { await cmd.reply("❌ Unbekannte Kategorie."); return; }
+          if (!CATEGORIES[typ]) { await cmd.reply("❌ Unbekannte Kategorie."); return; }
           watchConfig.categoryKey = typ;
           seenItemIds.clear();
-          const label = typ === "alle"
-            ? "Alle Kategorien (jede in eigenem Kanal)"
-            : `**${CATEGORIES[typ]!.label}** → #${CATEGORIES[typ]!.channelName}`;
-          await cmd.reply(`✅ Kategorie gesetzt: ${label}`);
-
-        } else if (sub === "geschlecht") {
-          const typ = cmd.options.getString("typ", true) as Gender;
-          watchConfig.gender = typ;
-          seenItemIds.clear();
-          await cmd.reply(`✅ Geschlecht gesetzt: **${genderLabel(typ)}**`);
+          await cmd.reply(`✅ Kategorie gesetzt: **${CATEGORIES[typ]!.label}** → #${CATEGORIES[typ]!.channelName}`);
 
         } else if (sub === "suche") {
           await cmd.deferReply();
@@ -705,9 +593,6 @@ export async function startBot() {
           seenItemIds.clear();
           itemCache.clear();
           await cmd.reply("🗑️ Cache geleert. Bei nächster Suche werden alle Items wieder als 'neu' behandelt.");
-
-        } else if (sub === "token") {
-          await cmd.reply({ content: "ℹ️ Token-Management wurde entfernt. Der Bot nutzt jetzt tokenlose API-Anfragen.", ephemeral: true });
         }
 
       } else if (cmd.commandName === "lizenz") {
