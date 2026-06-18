@@ -77,24 +77,13 @@ interface CategoryDef {
 }
 
 const CATEGORIES: Record<string, CategoryDef> = {
-  pullover: { label: "Pullover & Strickjacken", keyword: "Pullover", channelName: "pullover-strickjacken", herrenCatalogIds: [79], damenCatalogIds: [80] },
-  hoodie: { label: "Hoodies & Sweatshirts", keyword: "Hoodie", channelName: "hoodies-sweatshirts", herrenCatalogIds: [267], damenCatalogIds: [266] },
-  tshirt: { label: "T-Shirts", keyword: "T-Shirt", channelName: "t-shirts", herrenCatalogIds: [76], damenCatalogIds: [77] },
-  hemd: { label: "Hemden", keyword: "Hemd", channelName: "hemden", herrenCatalogIds: [536], damenCatalogIds: [] },
-  jacke: { label: "Jacken & Mäntel", keyword: "Jacke", channelName: "jacken-mäntel", herrenCatalogIds: [1206], damenCatalogIds: [1037] },
-  hose: { label: "Hosen", keyword: "Hose", channelName: "hosen", herrenCatalogIds: [34], damenCatalogIds: [33] },
-  jeans: { label: "Jeans", keyword: "Jeans", channelName: "jeans", herrenCatalogIds: [257], damenCatalogIds: [10] },
-  shorts: { label: "Shorts", keyword: "Shorts", channelName: "shorts", herrenCatalogIds: [82], damenCatalogIds: [11] },
-  schuhe: { label: "Schuhe", keyword: "Schuhe", channelName: "schuhe", herrenCatalogIds: [1242], damenCatalogIds: [16] },
-  trainingsanzug: { label: "Trainingsanzug", keyword: "Trainingsanzug", channelName: "trainingsanzug", herrenCatalogIds: [2050], damenCatalogIds: [2994] },
-  muetze: { label: "Mützen & Caps", keyword: "Mütze", channelName: "mützen-caps", herrenCatalogIds: [89], damenCatalogIds: [88] },
+  kleidung: { label: "Kleidung", keyword: "", channelName: "deals", herrenCatalogIds: [], damenCatalogIds: [] },
 };
 
 const ALL_CATEGORY_KEYS = Object.keys(CATEGORIES);
 
 const CATEGORY_CHOICES = [
-  { name: "Alle Kategorien", value: "alle" },
-  ...Object.entries(CATEGORIES).map(([value, def]) => ({ name: def.label, value })),
+  { name: "Kleidung", value: "kleidung" },
 ];
 
 interface WatchConfig {
@@ -109,7 +98,7 @@ const watchConfig: WatchConfig = {
   brands: [...DEFAULT_BRANDS],
   maxPrice: undefined,
   active: true,
-  categoryKey: "alle",
+  categoryKey: "kleidung",
   gender: "beide",
 };
 
@@ -263,28 +252,23 @@ async function postDealsForGenderTarget(client: Client, categoryKeys: string[], 
     logger.info(`🔍 Suche in Kategorie: ${cat.label} (${target.section})`);
     await new Promise((r) => setTimeout(r, 500));
 
-    const catalogIds = target.catalogIdsFn(categoryKey);
-    if (catalogIds.length === 0) continue;
-
-    const channel =
-      (await findChannelInSection(client, cat.channelName, target.section)) ??
-      (await getFallbackChannel(client));
+    // Use simple channel name without section
+    const channel = (await findChannelByName(client, cat.channelName)) ?? (await getFallbackChannel(client));
 
     if (!channel) {
-      logger.warn(`Kanal #${cat.channelName} im Bereich ${target.section} nicht gefunden.`);
+      logger.warn(`Kanal #${cat.channelName} nicht gefunden.`);
       continue;
     }
 
     for (const brand of watchConfig.brands) {
       try {
-        const searchText = buildSearchText(brand, categoryKey);
+        const searchText = brand; // Simple brand search, no category keyword
         logger.info(`🔎 Suche: "${searchText}" (Max: ${watchConfig.maxPrice || 'unbegrenzt'}€)`);
         
-        // Search both platforms in parallel
+        // Search both platforms in parallel (no catalogIds = broader search)
         const [vintedItems, kleinanzeigenItems] = await Promise.all([
           searchVinted(searchText, {
             maxPrice: watchConfig.maxPrice,
-            catalogIds,
           }),
           searchKleinanzeigen(searchText, {
             maxPrice: watchConfig.maxPrice,
@@ -367,7 +351,7 @@ async function postDeals(client: Client) {
 
   logger.info("🚀 Starte Deal-Suche auf Vinted & Kleinanzeigen");
 
-  const categoryKeys = watchConfig.categoryKey === "alle" ? ALL_CATEGORY_KEYS : [watchConfig.categoryKey];
+  const categoryKeys = [watchConfig.categoryKey];
   const targets: GenderTarget[] = [];
 
   if (watchConfig.gender === "herren" || watchConfig.gender === "beide") {
@@ -671,17 +655,14 @@ export async function startBot() {
           await cmd.reply("⏹️ Deal-Suche gestoppt.");
 
         } else if (sub === "status") {
-          const catLabel = watchConfig.categoryKey === "alle"
-            ? "Alle Kategorien (jede in eigenem Kanal)"
-            : CATEGORIES[watchConfig.categoryKey]?.label ?? "Unbekannt";
           await cmd.reply(
             `📊 **Status**\n` +
             `• Aktiv: ${watchConfig.active ? "✅ Ja" : "❌ Nein"}\n` +
             `• Marken: ${watchConfig.brands.join(", ")}\n` +
-            `• Kategorie: **${catLabel}**\n` +
             `• Geschlecht: **${genderLabel(watchConfig.gender)}**\n` +
             `• Max. Preis: ${watchConfig.maxPrice ? `${watchConfig.maxPrice} EUR` : "kein Limit"}\n` +
-            `• Items im Cache: ${seenItemIds.size} (${itemCache.size} im Speicher)`,
+            `• Items im Cache: ${seenItemIds.size} (${itemCache.size} im Speicher)\n` +
+            `• Kanal: #deals`,
           );
 
         } else if (sub === "marken") {

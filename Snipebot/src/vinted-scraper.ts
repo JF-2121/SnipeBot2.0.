@@ -99,20 +99,28 @@ export async function searchVinted(
 
     logger.info(`🔍 Vinted Suche: ${searchText}`);
 
+    // Use simple headers like Python version - no auth needed
+    const headers: Record<string, string> = {
+      "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0 Safari/537.36",
+      Accept: "application/json, text/plain, */*",
+      "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
+      Referer: `${VINTED_BASE}/catalog`,
+    };
+
     const response = await axios.get(`${VINTED_BASE}/api/v2/catalog/items`, {
       params,
-      headers: {
-        "User-Agent": randomUA(),
-        Accept: "application/json, text/plain, */*",
-        "Accept-Language": "de-DE,de;q=0.9,en;q=0.8",
-        Referer: `${VINTED_BASE}/catalog`,
-      },
-      timeout: 15000,
+      headers,
+      timeout: 8000,
       validateStatus: () => true,
     });
 
+    if (response.status === 401 || response.status === 403) {
+      logger.warn(`⚠️ Vinted blockiert (${response.status}) - versuche es in 2 Min. erneut`);
+      return [];
+    }
+
     if (response.status !== 200) {
-      logger.warn(`⚠️ Vinted Status ${response.status} - möglicherweise blockiert`);
+      logger.warn(`⚠️ Vinted Status ${response.status}`);
       return [];
     }
 
