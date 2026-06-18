@@ -1,0 +1,4 @@
+{"id":"2fc6c9ae-dd01-4637-9fc5-698b47a089ca","ts":"2026-06-18T16:02:43.894Z","path":"/Users/hackinjosh/Desktop/Snipebo2.0./Snipebot/src/scrapers/registry.ts","version":"1.0.0","taskID":"bd971821-9327-4b99-895f-ced44069c09f"}
+{"id":"8aaf4f2a-4eab-4eab-b926-3dcd0360cff6","ts":"2026-06-18T16:02:50.136Z","path":"/Users/hackinjosh/Desktop/Snipebo2.0./Snipebot/src/scrapers/types.ts","version":"1.0.0","taskID":"bd971821-9327-4b99-895f-ced44069c09f"}
+{"id":"45bc9f55-f3d8-4c9c-b36e-12678f07406a","ts":"2026-06-18T16:02:58.059Z","path":"/Users/hackinjosh/Desktop/Snipebo2.0./Snipebot/src/scrapers/kleinanzeigen.ts","version":"1.0.0","taskID":"bd971821-9327-4b99-895f-ced44069c09f"}
+{"id":"e14733fa-9793-44c4-a311-2651bc7badf8","ts":"2026-06-18T16:03:06.892Z","path":"/Users/hackinjosh/Desktop/Snipebo2.0./Snipebot/src/scrapers/vinted.ts","version":"1.0.0","taskID":"bd971821-9327-4b99-895f-ced44069c09f"}

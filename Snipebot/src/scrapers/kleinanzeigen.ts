@@ -96,6 +96,7 @@ async function search(searchText: string, options: SearchOptions = {}): Promise<
       },
     });
 
+    kleinanzeigenScraper.lastRawHtml = response.data;
     const $ = cheerio.load(response.data);
     const items: ScrapedItem[] = [];
 

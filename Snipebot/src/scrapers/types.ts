@@ -17,4 +17,5 @@ export interface SearchOptions {
 export interface Scraper {
   name: string;
   search: (query: string, options: SearchOptions) => Promise<ScrapedItem[]>;
+  lastRawHtml?: string;
 }
